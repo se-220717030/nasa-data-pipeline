@@ -169,14 +169,12 @@ The objective is to investigate associations with a screening label, not to fore
 
 ---
 
-Team
+## Team
 
-Rana Yalçın — @se-220717030
+- **Rana Yalçın** — `@se-220717030`
+- **Burak Avşar** — `@se-220717054`
+- **Elif Şahin** — `@se-230717060`
 
-Burak Avşar — @se-220717054
-
-Elif Şahin — @se-230717060
-
-Status
+## Status
 
 M1 — ingestion complete
