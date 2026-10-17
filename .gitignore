@@ -142,3 +142,6 @@ __marimo__/
 # --- BURADAN AŞAĞISI PROJENİZ İÇİN EKLENENLER ---
 # Raw data directories (Ham veriler GitHub'a gitmeyecek, yerelde üretilecek)
 data/raw/
+
+# Local SQLite database
+data/*.db
