@@ -12,20 +12,13 @@ CREATE TABLE IF NOT EXISTS asteroids (
     designation TEXT,
     absolute_magnitude_h REAL,
     is_potentially_hazardous INTEGER
-        CHECK (
-            is_potentially_hazardous IS NULL
-            OR is_potentially_hazardous IN (0, 1)
-        ),
+        CHECK (is_potentially_hazardous IS NULL OR is_potentially_hazardous IN (0, 1)),
     is_sentry_object INTEGER
-        CHECK (
-            is_sentry_object IS NULL
-            OR is_sentry_object IN (0, 1)
-        ),
+        CHECK (is_sentry_object IS NULL OR is_sentry_object IN (0, 1)),
     diameter_min_km REAL,
     diameter_max_km REAL,
     retrieved_at TEXT NOT NULL
 ) STRICT;
-
 
 -- 2. Orbital data
 -- An asteroid may have no orbital data in the collected files.
@@ -49,39 +42,34 @@ CREATE TABLE IF NOT EXISTS orbits (
     orbit_class_description TEXT,
     orbit_class_range TEXT,
     orbit_uncertainty TEXT,
-    orbit_determination_date TEXT,
+    orbit_determination_date TEXT,      -- ISO 8601 UTC
     retrieved_at TEXT NOT NULL,
-
-    FOREIGN KEY (asteroid_key)
-        REFERENCES asteroids (asteroid_key)
+    FOREIGN KEY (asteroid_key) REFERENCES asteroids (asteroid_key)
 ) STRICT;
-
 
 -- 3. Close-approach events
 -- One event is identified by asteroid + epoch timestamp.
 CREATE TABLE IF NOT EXISTS approaches (
     asteroid_key INTEGER NOT NULL,
-    epoch_date_close_approach INTEGER NOT NULL,
-    close_approach_date TEXT NOT NULL,
-    close_approach_date_full TEXT,
+    epoch_date_close_approach INTEGER NOT NULL,   -- ms since 1970-01-01 UTC
+    close_approach_date TEXT NOT NULL,            -- YYYY-MM-DD
+    close_approach_date_full TEXT,                -- ISO 8601 UTC, 1901-08-23T17:36Z
     relative_velocity_km_s REAL,
     miss_distance_km REAL,
     orbiting_body TEXT,
     retrieved_at TEXT NOT NULL,
-
-    PRIMARY KEY (
-        asteroid_key,
-        epoch_date_close_approach
-    ),
-
-    FOREIGN KEY (asteroid_key)
-        REFERENCES asteroids (asteroid_key)
+    PRIMARY KEY (asteroid_key, epoch_date_close_approach),
+    FOREIGN KEY (asteroid_key) REFERENCES asteroids (asteroid_key)
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_approaches_date ON approaches (close_approach_date);
+CREATE INDEX IF NOT EXISTS idx_approaches_asteroid ON approaches (asteroid_key);
 
--- Indexes for common joins and date-based analysis
-CREATE INDEX IF NOT EXISTS idx_approaches_date
-    ON approaches (close_approach_date);
-
-CREATE INDEX IF NOT EXISTS idx_approaches_asteroid
-    ON approaches (asteroid_key);
+-- 4. Quarantine: records that could not be loaded
+CREATE TABLE IF NOT EXISTS quarantine (
+    quarantine_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL,
+    raw_record TEXT NOT NULL,
+    retrieved_at TEXT NOT NULL,
+    UNIQUE (reason, raw_record, retrieved_at)
+) STRICT;

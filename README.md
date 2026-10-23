@@ -32,13 +32,14 @@ The API requires a NASA API key. The key must be provided through an environment
 
 ### Data Entities
 
-The project organizes the collected data into three entities:
+The project organizes the collected data into three entities, plus one table for records that cannot be loaded:
 
 - **`asteroids`** — one row per asteroid.
 - **`orbits`** — one row per asteroid orbit.
 - **`approaches`** — one row per close-approach event.
+- **`quarantine`** — one row per raw record that could not be loaded.
 
-The tables are connected using the asteroid identifier.
+The entity tables are connected using the asteroid identifier.
 
 The initial data collection target is at least 5,000 asteroids and their associated close-approach data.
 
@@ -50,7 +51,7 @@ The initial data collection target is at least 5,000 asteroids and their associa
 
 - Python 3
 - Git
-- A NASA API key from the [NASA API portal](https://api.nasa.gov/)
+- A NASA API key from the [NASA API portal](https://api.nasa.gov/) (only for ingestion, not for building the database)
 
 ### 1. Clone the repository
 
@@ -93,7 +94,7 @@ Check `.env.example` for the required variable name and format.
 
 Never commit the `.env` file or expose API credentials in the repository.
 
-### 6. Run the ingestion script
+### 6. Run the ingestion script (M1)
 
 From the repository root, run:
 
@@ -104,6 +105,17 @@ python src/ingest.py
 The ingestion script retrieves data from the approved NASA NeoWs endpoints and saves the raw responses in `data/raw/`.
 
 Each run preserves the original responses and uses UTC retrieval timestamps in filenames. Subsequent runs create new files rather than overwriting previously retrieved files.
+
+### 7. Build the database (M2)
+
+From a fresh clone with landed raw data in `data/raw/`:
+
+```bash
+python src/load.py      # builds data/asteroids.db from scratch; safe to run again
+python src/checks.py    # runs the six checks on a temporary copy (see Checks below)
+```
+
+`load.py` reads only the files in `data/raw/` and never calls the API. It creates `data/asteroids.db` if it does not exist. Running it again leaves the database unchanged.
 
 ---
 
@@ -126,10 +138,9 @@ nasa-data-pipeline/
     ├── ingest.py
     ├── db.py
     ├── load.py
+    ├── key_tests.py
     └── checks.py
 ```
-
-The structure above includes the planned M2 files. If `load.py`, `checks.py`, or the analytical query has not yet been added to the repository, those entries should be treated as planned until the corresponding files exist.
 
 ### Directory and File Descriptions
 
@@ -142,8 +153,9 @@ The structure above includes the planned M2 files. If `load.py`, `checks.py`, or
 | `data/raw/` | Stores raw data retrieved during ingestion |
 | `data/asteroids.db` | Generated SQLite database; not committed to Git |
 | `src/ingest.py` | Retrieves raw data from NASA NeoWs |
-| `src/db.py` | Provides the database connection and initialization functions |
+| `src/db.py` | Provides the shared `connect()` function and database initialization |
 | `src/load.py` | Loads and validates raw data in the database |
+| `src/key_tests.py` | Tests the key assumptions of the schema on the raw data |
 | `src/checks.py` | Runs database integrity and loading checks |
 | `sql/schema.sql` | Defines database tables, constraints, and indexes |
 | `sql/queries/` | Stores analytical SQL queries |
@@ -169,78 +181,150 @@ Data cleaning, transformation, feature engineering, database loading, and machin
 
 ---
 
-## Database Schema and Data Model — M2
+## Data Model — M2
 
-Milestone M2 introduces a relational SQLite database to organize the collected NASA NeoWs data for further analysis.
+Milestone M2 turns the landed raw files into a SQLite database that cannot contradict itself, refuses invalid data, and gives the same result however many times the load runs.
 
-### Database Tables
+### ER diagram
 
-#### `asteroids`
+```mermaid
+erDiagram
+    ASTEROIDS ||--o| ORBITS : "has at most one"
+    ASTEROIDS ||--o{ APPROACHES : "has many"
 
-Stores one record per asteroid. The table includes:
-
-- `asteroid_key` — surrogate primary key.
-- `source_id` — required, unique NASA source identifier.
-- `name` and `designation` — asteroid identification fields.
-- `absolute_magnitude_h` — absolute magnitude.
-- `is_potentially_hazardous` — potentially hazardous status.
-- `is_sentry_object` — Sentry object status.
-- `diameter_min_km` and `diameter_max_km` — estimated diameter bounds.
-- `retrieved_at` — UTC retrieval timestamp.
-
-#### `orbits`
-
-Stores orbital characteristics for each asteroid, including eccentricity, inclination, semi-major axis, orbital period, minimum orbit intersection distance, and orbit classification.
-
-The table uses `orbit_key` as its surrogate primary key and includes a required, unique `source_id`. The `asteroid_key` column is unique and references `asteroids.asteroid_key`, allowing at most one orbit record per asteroid in this model.
-
-#### `approaches`
-
-Stores close-approach events, including:
-
-- Close-approach date and epoch timestamp.
-- Relative velocity in kilometres per second.
-- Miss distance in kilometres.
-- Orbiting body.
-- Retrieval timestamp.
-
-The table uses a composite primary key consisting of `asteroid_key` and `epoch_date_close_approach`. Its `asteroid_key` references `asteroids.asteroid_key`, allowing multiple approach events for the same asteroid.
-
-### Keys, Constraints, and Relationships
-
-The schema defines foreign key relationships between `asteroids`, `orbits`, and `approaches`.
-
-All three tables use SQLite `STRICT` mode. Required identifiers and retrieval timestamps are declared `NOT NULL`. The asteroid status fields are constrained to `0`, `1`, or `NULL`.
-
-The schema is defined in `sql/schema.sql`. It uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements so that initialization can be repeated without recreating existing tables and indexes.
-
-### Database Connection and Initialization
-
-The file `src/db.py` provides the shared database connection and initialization functions.
-
-The `connect()` function opens a SQLite connection and enables foreign key enforcement using `PRAGMA foreign_keys = ON`.
-
-The `initialize_database()` function creates the database directory if necessary and executes the schema.
-
-To initialize the database from the repository root, run:
-
-```bash
-python src/db.py
+    ASTEROIDS {
+        INTEGER asteroid_key PK
+        TEXT source_id UK
+        TEXT name
+        TEXT designation
+        REAL absolute_magnitude_h
+        INTEGER is_potentially_hazardous
+        INTEGER is_sentry_object
+        REAL diameter_min_km
+        REAL diameter_max_km
+        TEXT retrieved_at
+    }
+    ORBITS {
+        INTEGER orbit_key PK
+        TEXT source_id UK
+        INTEGER asteroid_key FK
+        REAL eccentricity
+        REAL inclination
+        REAL semi_major_axis
+        TEXT orbit_determination_date
+        TEXT retrieved_at
+    }
+    APPROACHES {
+        INTEGER asteroid_key PK, FK
+        INTEGER epoch_date_close_approach PK
+        TEXT close_approach_date
+        TEXT close_approach_date_full
+        REAL relative_velocity_km_s
+        REAL miss_distance_km
+        TEXT orbiting_body
+        TEXT retrieved_at
+    }
+    QUARANTINE {
+        INTEGER quarantine_id PK
+        TEXT reason
+        TEXT raw_record
+        TEXT retrieved_at
+    }
 ```
 
-The generated database is stored at `data/asteroids.db`. It is a local build artifact and should not be committed to Git.
+`orbits` is shown with a subset of its columns; all columns are in `sql/schema.sql`. `quarantine` has no foreign key on purpose: it holds records whose entity we do not have.
 
-### Initial Schema Validation
+### Grain of every table
 
-The initial schema was tested using an in-memory SQLite database. The three tables were created successfully, and the foreign key definitions, `STRICT` table declarations, required retrieval timestamp columns, and key constraints were inspected.
+- `asteroids`: one row is one near-Earth asteroid, identified by NASA's id.
+- `orbits`: one row is the latest known orbital solution of one asteroid (at most one per asteroid).
+- `approaches`: one row is one close approach of one asteroid at one moment (epoch).
+- `quarantine`: one row is one raw record that could not be loaded, with the reason.
 
-The schema initialization command also completed successfully:
+### Schema
 
-```bash
-python src/db.py
+The schema is in `sql/schema.sql` and uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`, so it can be run repeatedly.
+
+- All four tables are `STRICT`.
+- Entity tables have a surrogate `INTEGER PRIMARY KEY`; NASA's id is kept as `source_id TEXT NOT NULL UNIQUE`.
+- `approaches` has the composite primary key `(asteroid_key, epoch_date_close_approach)`; every key column is `NOT NULL`.
+- `orbits.asteroid_key` is `UNIQUE`, so an asteroid has at most one orbit row.
+- Every relationship is a declared foreign key, and enforced: `connect()` in `src/db.py` runs `PRAGMA foreign_keys = ON` right after connecting, and every script uses it.
+- Every table has `retrieved_at` (UTC), taken from the timestamp in the name of the raw file the row came from.
+- Timestamps are ISO 8601 UTC text (`1901-08-23T17:36Z`); dates are zero-padded `YYYY-MM-DD`.
+- Asteroid status flags are constrained to `0`, `1`, or `NULL`.
+
+### The loader
+
+`python src/load.py` reads every `.json` file in `data/raw/` (both the `browse` shape, a list of asteroids, and the `feed` shape, asteroids grouped by date) and loads three entity/event tables plus quarantine.
+
+- **Deduplication by key, not by row.** Records are grouped by their key; the version with the latest `retrieved_at` wins. The decision uses the timestamp in the file name, never the order in which files are read.
+- **Upserts.** All writes use `INSERT ... ON CONFLICT ... DO UPDATE` with a guard on `retrieved_at`. No `INSERT OR REPLACE` (it would change surrogate keys) and no `df.to_sql`.
+- **Atomic.** The whole load runs in one transaction (`with con:`). A broken raw file stops the run before anything is written; an error during writing rolls everything back. The schema is created before the transaction starts.
+- **Parameterised.** Every value reaches SQL through a `:name` or `?` placeholder.
+- **Validation.** Text where a number belongs becomes `NULL` and is counted. Timestamps are converted to ISO 8601 UTC before insertion.
+
+### Run summary
+
+Output of two consecutive runs on a fresh database, built from the 4 landed raw files:
+
+```text
+# run 1
+files read: 4 raw files (2026-10-12 .. 2026-10-12)
+asteroids: 62 in database (+62 this run)
+orbits: 40 in database (+40 this run)
+approaches: 1,158 in database (+1158 this run)
+values cleaned: 0 (non-numeric/invalid -> NULL)
+quarantined: 0 in table (+0 this run)
+foreign_key_check: OK
+STATUS: COMPLETE
+
+# run 2
+files read: 4 raw files (2026-10-12 .. 2026-10-12)
+asteroids: 62 in database (+0 this run)
+orbits: 40 in database (+0 this run)
+approaches: 1,158 in database (+0 this run)
+values cleaned: 0 (non-numeric/invalid -> NULL)
+quarantined: 0 in table (+0 this run)
+foreign_key_check: OK
+STATUS: COMPLETE
 ```
 
-Data loading, validation, quarantine handling, idempotence, atomicity, and analytical query checks must be completed and verified as part of the remaining M2 work.
+### Decisions and findings
+
+**Keys.**
+- Asteroid: surrogate `asteroid_key`; NASA's `id` is kept as `source_id`.
+- Approach: `(asteroid_key, epoch_date_close_approach)`. The epoch is an integer in milliseconds since 1970 (UTC), so no time-zone conversion is needed.
+- Tests, run on the 4 landed raw files with `src/key_tests.py`:
+  - Uniqueness: 0 duplicate (asteroid id, epoch) pairs within any single file, so the event key held.
+  - Stability: 0 asteroids changed name between files, and 0 keys had more than one `miss_distance` value across files.
+  - Orbiting body: 0 keys had more than one `orbiting_body`, so leaving it out of the key is safe on this data.
+  - References: approaches and orbits are nested inside their asteroid in the source, so every one resolves by construction. The load confirmed it: 0 quarantined records and `foreign_key_check: OK`.
+  - Limit of these tests: all raw files were retrieved on 2026-10-12, so they say little about how values change over several days. We will re-check once more retrievals exist.
+
+**Missing values.** A field that is absent in the source is stored as `NULL` and means "not provided by the source", never zero. A value that is present but cannot be converted (for example text where a number belongs) is also stored as `NULL` and counted in the run summary as "values cleaned". In the current data this count is 0.
+
+**Timestamps.** `close_approach_date_full` ("1901-Aug-23 17:36") and `orbit_determination_date` ("2026-10-11 06:57:01") are assumed to be UTC and stored as ISO 8601. If `close_approach_date` is invalid, it is derived from the epoch and counted as cleaned.
+
+**Unknown references.** A record that points to an asteroid we do not have goes to the `quarantine` table with a reason and its raw JSON; it is neither dropped nor does it stop the load. Quarantine writes are idempotent (`UNIQUE` plus `ON CONFLICT DO NOTHING`). Because approaches and orbits arrive nested inside their asteroid, orphans are not expected; the quarantine mostly catches records without an id or with an invalid epoch. Current count: 0.
+
+**Change over time.** We use type 1: the version with the latest `retrieved_at` wins. A renamed asteroid is updated in place and keeps its `asteroid_key`. M6 may revisit this.
+
+**Known issues.**
+- 22 of 62 asteroids have no orbit row and no `designation`. The file `feed_20261012T134632Z_2026-10-09_to_2026-10-12.json` is the only raw file without `orbital_data` (checked with `grep -L orbital_data data/raw/*.json`), and these asteroids appear only there. The schema allows asteroids without orbits; the data can be completed later from the `browse` endpoint.
+- All 4 raw files were retrieved on 2026-10-12, so the "latest retrieval wins" rule has only been exercised within one day.
+- Raw files come in two shapes (`browse` and `feed`); the loader handles both.
+- We have not checked whether `epoch_date_close_approach` and `close_approach_date_full` always describe the same instant.
+
+### Checks
+
+`src/checks.py` runs against a temporary copy of the database (never the real one) and reports PASS or FAIL for: duplicate natural key, orphan event, NULL key, wrong type, idempotence, and atomicity.
+
+> **TODO (Member 3):** paste the output of `python src/checks.py` here once all six checks pass.
+
+### Analytical query
+
+> **TODO (Member 3):** paste `sql/queries/asteroid_analysis.sql` and its output here. The query must start with a comment stating its question and result grain, and why the aggregation is correct at that grain.
 
 ---
 
@@ -270,4 +354,4 @@ The objective is to investigate associations with a screening label, not to fore
 
 **M1 — ingestion complete.**
 
-**M2 — database schema and connection setup implemented and tested.** Data loading, validation, integrity checks, and analytical query validation remain to be completed and verified.
+**M2 — schema and loader complete and tested (idempotent, atomic, parameterised).** Still to finish before tagging: `src/checks.py` results and the analytical query (see TODOs above). Update this line to “M2 — schema and load complete.” once both are in.

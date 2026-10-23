@@ -1,0 +1,8 @@
+files read: 4 raw files (2026-10-12 .. 2026-10-12)
+asteroids: 62 in database (+62 this run)
+orbits: 40 in database (+40 this run)
+approaches: 1,158 in database (+1158 this run)
+values cleaned: 0 (non-numeric/invalid -> NULL)
+quarantined: 0 in table (+0 this run)
+foreign_key_check: OK
+STATUS: COMPLETE
