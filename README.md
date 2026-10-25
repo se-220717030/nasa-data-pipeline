@@ -217,11 +217,11 @@ erDiagram
     APPROACHES {
         INTEGER asteroid_key PK, FK
         INTEGER epoch_date_close_approach PK
+        TEXT orbiting_body PK
         TEXT close_approach_date
         TEXT close_approach_date_full
         REAL relative_velocity_km_s
         REAL miss_distance_km
-        TEXT orbiting_body
         TEXT retrieved_at
     }
     QUARANTINE {
@@ -238,7 +238,7 @@ erDiagram
 
 - `asteroids`: one row is one near-Earth asteroid, identified by NASA's id.
 - `orbits`: one row is the latest known orbital solution of one asteroid (at most one per asteroid).
-- `approaches`: one row is one close approach of one asteroid at one moment (epoch).
+- `approaches`: one row is one close approach of one asteroid to one body (Earth, Moon, ...) at one moment (epoch).
 - `quarantine`: one row is one raw record that could not be loaded, with the reason.
 
 ### Schema
@@ -247,7 +247,7 @@ The schema is in `sql/schema.sql` and uses `CREATE TABLE IF NOT EXISTS` and `CRE
 
 - All four tables are `STRICT`.
 - Entity tables have a surrogate `INTEGER PRIMARY KEY`; NASA's id is kept as `source_id TEXT NOT NULL UNIQUE`.
-- `approaches` has the composite primary key `(asteroid_key, epoch_date_close_approach)`; every key column is `NOT NULL`.
+- `approaches` has the composite primary key `(asteroid_key, epoch_date_close_approach, orbiting_body)`; every key column is `NOT NULL`.
 - `orbits.asteroid_key` is `UNIQUE`, so an asteroid has at most one orbit row.
 - Every relationship is a declared foreign key, and enforced: `connect()` in `src/db.py` runs `PRAGMA foreign_keys = ON` right after connecting, and every script uses it.
 - Every table has `retrieved_at` (UTC), taken from the timestamp in the name of the raw file the row came from.
@@ -256,7 +256,9 @@ The schema is in `sql/schema.sql` and uses `CREATE TABLE IF NOT EXISTS` and `CRE
 
 ### The loader
 
-`python src/load.py` reads every `.json` file in `data/raw/` (both the `browse` shape, a list of asteroids, and the `feed` shape, asteroids grouped by date) and loads three entity/event tables plus quarantine.
+`python src/load.py` reads every `.json` file in `data/raw/` (the `browse` shape, a list of asteroids; the `feed` shape, asteroids grouped by date; and the `lookup` shape, one asteroid object per file) and loads three entity/event tables plus quarantine.
+
+File names carry the UTC retrieval time with or without microseconds (`20261017T123742Z`, `20261017T125321207719Z`). Both are read, and `retrieved_at` is always stored with six fractional digits (`2026-10-17T12:53:21.207719Z`) so that comparing the text gives the same order as comparing the times.
 
 - **Deduplication by key, not by row.** Records are grouped by their key; the version with the latest `retrieved_at` wins. The decision uses the timestamp in the file name, never the order in which files are read.
 - **Upserts.** All writes use `INSERT ... ON CONFLICT ... DO UPDATE` with a guard on `retrieved_at`. No `INSERT OR REPLACE` (it would change surrogate keys) and no `df.to_sql`.
@@ -266,24 +268,24 @@ The schema is in `sql/schema.sql` and uses `CREATE TABLE IF NOT EXISTS` and `CRE
 
 ### Run summary
 
-Output of two consecutive runs on a fresh database, built from the 4 landed raw files:
+Output of two consecutive runs on a fresh database, built from the 360 landed raw files (256 browse, 4 feed, 100 lookup):
 
 ```text
 # run 1
-files read: 4 raw files (2026-10-12 .. 2026-10-12)
-asteroids: 62 in database (+62 this run)
-orbits: 40 in database (+40 this run)
-approaches: 1,158 in database (+1158 this run)
+files read: 360 raw files (2026-10-17 .. 2026-10-17)
+asteroids: 5,033 in database (+5033 this run)
+orbits: 5,000 in database (+5000 this run)
+approaches: 150,936 in database (+150936 this run)
 values cleaned: 0 (non-numeric/invalid -> NULL)
 quarantined: 0 in table (+0 this run)
 foreign_key_check: OK
 STATUS: COMPLETE
 
 # run 2
-files read: 4 raw files (2026-10-12 .. 2026-10-12)
-asteroids: 62 in database (+0 this run)
-orbits: 40 in database (+0 this run)
-approaches: 1,158 in database (+0 this run)
+files read: 360 raw files (2026-10-17 .. 2026-10-17)
+asteroids: 5,033 in database (+0 this run)
+orbits: 5,000 in database (+0 this run)
+approaches: 150,936 in database (+0 this run)
 values cleaned: 0 (non-numeric/invalid -> NULL)
 quarantined: 0 in table (+0 this run)
 foreign_key_check: OK
@@ -294,13 +296,12 @@ STATUS: COMPLETE
 
 **Keys.**
 - Asteroid: surrogate `asteroid_key`; NASA's `id` is kept as `source_id`.
-- Approach: `(asteroid_key, epoch_date_close_approach)`. The epoch is an integer in milliseconds since 1970 (UTC), so no time-zone conversion is needed.
-- Tests, run on the 4 landed raw files with `src/key_tests.py`:
-  - Uniqueness: 0 duplicate (asteroid id, epoch) pairs within any single file, so the event key held.
+- Approach: `(asteroid_key, epoch_date_close_approach, orbiting_body)`. The epoch is an integer in milliseconds since 1970 (UTC), so no time-zone conversion is needed.
+- Tests, run on the 360 landed raw files with `src/key_tests.py`:
+  - Uniqueness: (asteroid id, epoch) alone is **not** unique: 15 pairs appear twice in the same file, once for Earth and once for the Moon (or Venus/Mars), with different miss distances. With (asteroid id, epoch, orbiting body) there are 0 duplicates, so the body is part of the key. Our first key, tested on 4 files from 2026-10-12, had missed this; with it, the loader silently kept only one of the two approaches.
   - Stability: 0 asteroids changed name between files, and 0 keys had more than one `miss_distance` value across files.
-  - Orbiting body: 0 keys had more than one `orbiting_body`, so leaving it out of the key is safe on this data.
   - References: approaches and orbits are nested inside their asteroid in the source, so every one resolves by construction. The load confirmed it: 0 quarantined records and `foreign_key_check: OK`.
-  - Limit of these tests: all raw files were retrieved on 2026-10-12, so they say little about how values change over several days. We will re-check once more retrievals exist.
+  - Limit of these tests: all raw files were retrieved on 2026-10-17, so they say little about how values change over several days. We will re-check once more retrievals exist.
 
 **Missing values.** A field that is absent in the source is stored as `NULL` and means "not provided by the source", never zero. A value that is present but cannot be converted (for example text where a number belongs) is also stored as `NULL` and counted in the run summary as "values cleaned". In the current data this count is 0.
 
@@ -311,20 +312,89 @@ STATUS: COMPLETE
 **Change over time.** We use type 1: the version with the latest `retrieved_at` wins. A renamed asteroid is updated in place and keeps its `asteroid_key`. M6 may revisit this.
 
 **Known issues.**
-- 22 of 62 asteroids have no orbit row and no `designation`. The file `feed_20261012T134632Z_2026-10-09_to_2026-10-12.json` is the only raw file without `orbital_data` (checked with `grep -L orbital_data data/raw/*.json`), and these asteroids appear only there. The schema allows asteroids without orbits; the data can be completed later from the `browse` endpoint.
-- All 4 raw files were retrieved on 2026-10-12, so the "latest retrieval wins" rule has only been exercised within one day.
-- Raw files come in two shapes (`browse` and `feed`); the loader handles both.
+- 33 of 5,033 asteroids have no orbit row. They appear only in `feed` files, which carry no `orbital_data`. The schema allows asteroids without orbits; the data can be completed later from the `lookup` endpoint.
+- All 360 raw files were retrieved on 2026-10-17, so the "latest retrieval wins" rule has only been exercised within one day.
+- Raw files come in three shapes (`browse`, `feed`, `lookup`); the loader handles all three.
 - We have not checked whether `epoch_date_close_approach` and `close_approach_date_full` always describe the same instant.
 
 ### Checks
 
-`src/checks.py` runs against a temporary copy of the database (never the real one) and reports PASS or FAIL for: duplicate natural key, orphan event, NULL key, wrong type, idempotence, and atomicity.
+`src/checks.py` runs against a temporary copy of the database (never the real one) and reports PASS or FAIL for: duplicate natural key, orphan event, NULL key, wrong type, idempotence, and atomicity. It exits with code 1 if any check fails.
 
-> **TODO (Member 3):** paste the output of `python src/checks.py` here once all six checks pass.
+Checks 1–4 each have two parts: a **scan** that confirms the loaded data has no violation, and a **probe** that tries a deliberately bad write (a duplicate key, an approach for an unknown asteroid, a `NULL` key, text in a number column, a flag value of 7) and confirms that SQLite refuses it. The probe shows that the guarantee comes from the schema, not from the data happening to be clean. Probes run inside a savepoint and are rolled back.
+
+- **Idempotence:** loads all raw files again into the copy and compares row counts and table contents before and after.
+- **Atomicity:** (a) on a new empty database, a trigger makes the load fail after 1,000 approaches have been written; afterwards every table must be empty. (b) A broken JSON file is added to a copy of the raw folder; the load must stop before writing anything.
+
+```text
+$ python src/checks.py
+checks on a temporary copy of asteroids.db: asteroids/orbits/approaches/quarantine = 5,033/5,000/150,936/0
+PASS  1. duplicate natural key   duplicates: asteroids=0, orbits=0, approaches=0; duplicate insert rejected: True
+PASS  2. orphan event            foreign_key_check rows=0, orphan rows=0; orphan insert rejected: True
+PASS  3. NULL key                NULL key values=0; NULL key insert rejected: True
+PASS  4. wrong type              rows with wrong type=0; text-in-number and bad flag rejected: True
+PASS  5. idempotence             reloaded all raw files into the copy; before=5,033/5,000/150,936/0, after=5,033/5,000/150,936/0, identical=True
+PASS  6. atomicity               failure after 1,000 approaches -> rows left=0; broken JSON file -> rows left=0
+6/6 checks passed
+```
 
 ### Analytical query
 
-> **TODO (Member 3):** paste `sql/queries/asteroid_analysis.sql` and its output here. The query must start with a comment stating its question and result grain, and why the aggregation is correct at that grain.
+`sql/queries/asteroid_analysis.sql`:
+
+```sql
+-- Question: How do potentially hazardous asteroids differ from non-hazardous ones
+--           in their orbits and in their close approaches to Earth?
+--
+-- Result grain: one row per value of asteroids.is_potentially_hazardous (1 = hazardous, 0 = not).
+--
+-- Why the aggregation is correct at this grain:
+--   approaches has many rows per asteroid (one per close approach), orbits has at most one.
+--   Joining approaches straight onto asteroids and then averaging would weight every asteroid
+--   by its number of approaches, and COUNT(*) would count approaches instead of asteroids.
+--   So the CTE first collapses approaches to ONE row per asteroid (Earth approaches only),
+--   and only then is it LEFT JOINed to asteroids and orbits. After the joins every row is still
+--   one asteroid, so COUNT(*) counts asteroids and each AVG gives every asteroid equal weight.
+--   LEFT JOINs keep asteroids without an orbit or without an Earth approach; AVG skips their NULLs,
+--   and the n_with_* columns show how many asteroids each average is based on.
+--   H, MOID and diameter define the hazard label, so they are deliberately left out.
+
+WITH earth_approaches AS (          -- grain: one row per asteroid
+    SELECT
+        asteroid_key,
+        COUNT(*)                    AS n_approaches,
+        MIN(miss_distance_km)       AS closest_miss_km,
+        MAX(relative_velocity_km_s) AS fastest_km_s
+    FROM approaches
+    WHERE orbiting_body = 'Earth'
+    GROUP BY asteroid_key
+)
+SELECT
+    a.is_potentially_hazardous                       AS hazardous,
+    COUNT(*)                                         AS n_asteroids,
+    COUNT(o.asteroid_key)                            AS n_with_orbit,
+    ROUND(AVG(o.eccentricity), 3)                    AS avg_eccentricity,
+    ROUND(AVG(o.inclination), 1)                     AS avg_inclination_deg,
+    ROUND(AVG(o.semi_major_axis), 2)                 AS avg_semi_major_axis_au,
+    COUNT(e.asteroid_key)                            AS n_with_earth_approach,
+    ROUND(AVG(e.n_approaches), 1)                    AS avg_earth_approaches,
+    ROUND(AVG(e.closest_miss_km) / 1e6, 2)           AS avg_closest_miss_million_km,
+    ROUND(AVG(e.fastest_km_s), 1)                    AS avg_fastest_km_s
+FROM asteroids AS a
+LEFT JOIN orbits AS o           ON o.asteroid_key = a.asteroid_key
+LEFT JOIN earth_approaches AS e ON e.asteroid_key = a.asteroid_key
+GROUP BY a.is_potentially_hazardous
+ORDER BY hazardous DESC;
+```
+
+Result:
+
+| hazardous | n_asteroids | n_with_orbit | avg_eccentricity | avg_inclination_deg | avg_semi_major_axis_au | n_with_earth_approach | avg_earth_approaches | avg_closest_miss_million_km | avg_fastest_km_s |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1046 | 1037 | 0.507 | 13.5 | 1.67 | 1030 | 30.6 | 6.26 | 22.6 |
+| 0 | 3987 | 3963 | 0.453 | 16.2 | 1.82 | 3127 | 23.8 | 17.97 | 18.1 |
+
+About 21% of the asteroids (1,046 of 5,033) are labelled potentially hazardous. On average they have more eccentric, slightly less inclined orbits, make more recorded Earth approaches, come about three times closer at their closest approach (6.3 vs 18.0 million km) and pass faster. Closest miss distance is related to MOID, which is part of the label's definition, so that difference is partly built into the label. This is a descriptive comparison, not a model.
 
 ---
 
@@ -354,4 +424,4 @@ The objective is to investigate associations with a screening label, not to fore
 
 **M1 — ingestion complete.**
 
-**M2 — schema and loader complete and tested (idempotent, atomic, parameterised).** Still to finish before tagging: `src/checks.py` results and the analytical query (see TODOs above). Update this line to “M2 — schema and load complete.” once both are in.
+**M2 — schema and load complete.**

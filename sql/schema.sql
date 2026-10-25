@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS orbits (
 ) STRICT;
 
 -- 3. Close-approach events
--- One event is identified by asteroid + epoch timestamp.
+-- One event is identified by asteroid + epoch timestamp + orbiting body:
+-- the same asteroid can pass Earth and the Moon at the same epoch (15 cases in the data).
 CREATE TABLE IF NOT EXISTS approaches (
     asteroid_key INTEGER NOT NULL,
     epoch_date_close_approach INTEGER NOT NULL,   -- ms since 1970-01-01 UTC
@@ -56,9 +57,9 @@ CREATE TABLE IF NOT EXISTS approaches (
     close_approach_date_full TEXT,                -- ISO 8601 UTC, 1901-08-23T17:36Z
     relative_velocity_km_s REAL,
     miss_distance_km REAL,
-    orbiting_body TEXT,
+    orbiting_body TEXT NOT NULL,
     retrieved_at TEXT NOT NULL,
-    PRIMARY KEY (asteroid_key, epoch_date_close_approach),
+    PRIMARY KEY (asteroid_key, epoch_date_close_approach, orbiting_body),
     FOREIGN KEY (asteroid_key) REFERENCES asteroids (asteroid_key)
 ) STRICT;
 

@@ -14,12 +14,14 @@ MONTHS = {m: i for i, m in enumerate(
 
 
 def retrieved_at_from_name(path):
-    # browse_20261012T133941Z_page0.json -> 2026-10-12T13:39:41Z
-    m = re.search(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z", path.name)
+    # browse_20261017T123742Z_page0.json        -> 2026-10-17T12:37:42.000000Z
+    # browse_20261017T125321207719Z_page0.json  -> 2026-10-17T12:53:21.207719Z
+    # Kesir her zaman 6 hane yazılır; böylece metin karşılaştırması zaman sırasıyla aynı olur.
+    m = re.search(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{0,6})Z", path.name)
     if not m:
         raise ValueError(f"dosya adında zaman damgası yok: {path.name}")
-    y, mo, d, h, mi, s = m.groups()
-    return f"{y}-{mo}-{d}T{h}:{mi}:{s}Z"
+    y, mo, d, h, mi, s, frac = m.groups()
+    return f"{y}-{mo}-{d}T{h}:{mi}:{s}.{frac.ljust(6, '0')}Z"
 
 
 def to_float(v, stats):
@@ -104,7 +106,10 @@ def read_raw(raw_dir):
     for f in files:
         data = json.loads(f.read_text(encoding="utf-8"))
         ra = retrieved_at_from_name(f)
-        neo = data.get("near_earth_objects", [])
+        if isinstance(data, dict) and "near_earth_objects" not in data and "id" in data:
+            neo = [data]  # lookup biçimi: tek asteroid nesnesi
+        else:
+            neo = data.get("near_earth_objects", [])
         if isinstance(neo, dict):  # feed biçimi: {"2026-10-11": [asteroid, ...]}
             neo = [a for day in neo.values() for a in day]
         for ast in neo:
@@ -146,7 +151,12 @@ def load(db_path=DEFAULT_DB, raw_dir=RAW):
                 quarantine.append(("yaklaşma epoch değeri geçersiz",
                                    json.dumps({"id": sid, **ca}, sort_keys=True), ra))
                 continue
-            k = (sid, ep)
+            body = ca.get("orbiting_body")
+            if not isinstance(body, str) or not body.strip():
+                quarantine.append(("yaklaşma orbiting_body yok",
+                                   json.dumps({"id": sid, **ca}, sort_keys=True), ra))
+                continue
+            k = (sid, ep, body)  # aynı anda Dünya ve Ay'a yaklaşma olabilir
             if k not in ev_best or ra > ev_best[k][0]:
                 ev_best[k] = (ra, ca)
 
@@ -225,7 +235,7 @@ def load(db_path=DEFAULT_DB, raw_dir=RAW):
                        retrieved_at = excluded.retrieved_at
                    WHERE excluded.retrieved_at >= orbits.retrieved_at""", p)
 
-        for (sid, ep), (ra, ca) in ev_best.items():
+        for (sid, ep, body), (ra, ca) in ev_best.items():
             row = con.execute("SELECT asteroid_key FROM asteroids WHERE source_id = ?", (sid,)).fetchone()
             if row is None:  # bilinmeyen varlık -> karantina
                 quarantine.append(("bilinmeyen asteroid", json.dumps({"id": sid, **ca}, sort_keys=True), ra))
@@ -246,18 +256,17 @@ def load(db_path=DEFAULT_DB, raw_dir=RAW):
                        (asteroid_key, epoch_date_close_approach, close_approach_date, close_approach_date_full,
                         relative_velocity_km_s, miss_distance_km, orbiting_body, retrieved_at)
                    VALUES (:k, :ep, :d, :full, :v, :md, :body, :ra)
-                   ON CONFLICT(asteroid_key, epoch_date_close_approach) DO UPDATE SET
+                   ON CONFLICT(asteroid_key, epoch_date_close_approach, orbiting_body) DO UPDATE SET
                        close_approach_date = excluded.close_approach_date,
                        close_approach_date_full = excluded.close_approach_date_full,
                        relative_velocity_km_s = excluded.relative_velocity_km_s,
                        miss_distance_km = excluded.miss_distance_km,
-                       orbiting_body = excluded.orbiting_body,
                        retrieved_at = excluded.retrieved_at
                    WHERE excluded.retrieved_at >= approaches.retrieved_at""",
                 {"k": row[0], "ep": ep, "d": date, "full": full,
                  "v": to_float((ca.get("relative_velocity") or {}).get("kilometers_per_second"), stats),
                  "md": to_float((ca.get("miss_distance") or {}).get("kilometers"), stats),
-                 "body": ca.get("orbiting_body"), "ra": ra})
+                 "body": body, "ra": ra})
 
         for reason, raw, ra in quarantine:
             con.execute("INSERT INTO quarantine (reason, raw_record, retrieved_at) VALUES (?, ?, ?) "
