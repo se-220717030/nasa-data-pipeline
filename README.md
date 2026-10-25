@@ -422,6 +422,8 @@ The objective is to investigate associations with a screening label, not to fore
 
 ## Status
 
-**M1 — ingestion complete.**
+**M1 — Complete.** NASA NeoWs data ingestion is implemented. Raw API responses are preserved with UTC retrieval timestamps, and repeated runs create new files without overwriting previous data.
 
-**M2 — schema and load complete.**
+**M2 — Complete.** The SQLite schema, database connection utilities, idempotent loader, integrity checks, and analytical SQL query are implemented and tested. All six checks pass, including duplicate-key rejection, foreign-key integrity, type enforcement, idempotence, and atomicity.
+
+The database contains 5,033 asteroids, 5,000 orbits, 150,936 close-approach records, and 0 quarantined records. The analytical query compares orbital and Earth close-approach characteristics between potentially hazardous and non-hazardous asteroids.
