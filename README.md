@@ -398,11 +398,12 @@ About 21% of the asteroids (1,046 of 5,033) are labelled potentially hazardous. 
 
 ---
 
+
 ## Planned Analysis
 
-In a later project stage, the asteroid, orbit, and close-approach data will be joined using the asteroid ID.
+The completed M2 analytical query compares orbital and Earth close-approach characteristics between potentially hazardous and non-hazardous asteroids.
 
-The analysis will compare potentially hazardous and non-hazardous asteroids and investigate associations between the hazard label and orbital or close-approach characteristics.
+In a later project stage, a simple classifier will be developed to investigate whether the selected orbital and close-approach features can help distinguish the two hazard-label groups.
 
 Absolute magnitude (H), minimum orbit intersection distance (MOID), and diameter will be excluded from predictive features, as specified in the project proposal.
 
