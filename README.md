@@ -832,6 +832,8 @@ The objective is to investigate associations with a screening label, not to fore
 
 Milestone M3 adds a cleaned data layer while preserving the original M2 tables. The cleaning pipeline uses explicit quality flags and mapping tables so that source values and cleaning decisions remain traceable.
 
+**Most important findings.** The data's main problems are about coverage, not bad values: 33 asteroids come only from the feed endpoint and have no designation and no orbit, 876 asteroids have no Earth close approach, and 56% of approaches are NASA predictions rather than observations. 15 asteroids are labelled hazardous although their H is just above NASA's 22.0 limit; we keep the label and flag them, because the label is our target variable. Three asteroids appear under two NASA ids and are resolved through a mapping table, and no impossible value was found by 17 physical rules. Every finding, decision, flag and constant is documented in [`docs/cleaning_report.md`](docs/cleaning_report.md).
+
 ### Cleaned tables
 
 | Cleaned table | Source table | Rows |
@@ -891,7 +893,7 @@ The STOP self-test deliberately introduces each of the three critical failure ty
 
 ### Known data-quality warnings
 
-**Missing designation values:** 39 of 5,033 asteroid records (0.77%) have no designation value in the source. These values are retained as missing and flagged as `missing_not_in_source`; they are not inferred or fabricated.
+**Missing designation values:** 33 of 5,033 asteroid records (0.66%) have no designation value in the source. These values are retained as missing and flagged as `missing_not_in_source`; they are not inferred or fabricated. (An earlier run showed 39: the M2 loader lost 6 designations, which is fixed in `src/load.py`.)
 
 **Approach coverage:** 4,157 asteroids are labelled `earth_approaches`, 305 are labelled `no_approach_in_source`, and 571 are labelled `no_earth_approach`. These categories distinguish missing source coverage from the absence of an Earth close-approach record.
 
@@ -913,13 +915,16 @@ Both runs also reported `M2 tables unchanged: OK` and `foreign_key_check: OK`.
 
 ### M3 command summary
 
+From a fresh clone with landed raw data in `data/raw/`:
+
 ```bash
+python src/load.py
 python src/clean.py
 python src/validate.py
 python src/validate.py --self-test
 ```
 
-The validation output and the two cleaning-run outputs are retained as M3 execution evidence. The SQLite database remains a generated local artifact and should be submitted separately if required by the course; it should not be committed unless the project instructions explicitly require it.
+The outputs are retained as M3 execution evidence: `m3_clean_run1.txt`, `m3_clean_run2.txt`, `m3_validation.txt`, `m3_validation_selftest.txt` (and `m2_checks.txt` for M2). Every cleaning decision, flag, constant and mapping is documented in [`docs/cleaning_report.md`](docs/cleaning_report.md). The SQLite database remains a generated local artifact and should be submitted separately if required by the course; it should not be committed unless the project instructions explicitly require it.
 
 ---
 
@@ -952,3 +957,6 @@ The validation output and the two cleaning-run outputs are retained as M3 execut
 
 
 The database contains 5,033 asteroids, 5,000 orbits, 150,936 close-approach records, and 0 quarantined records. The analytical query compares orbital and Earth close-approach characteristics between potentially hazardous and non-hazardous asteroids.
+
+
+**M3 — cleaned layer and quality report complete.** `src/clean.py` builds `asteroid_clean`, `orbit_clean` and `approach_clean` from the M2 tables (idempotent, atomic, M2 tables unchanged); `src/validate.py` reports 4 PASS, 2 WARN, 0 STOP, and each STOP check was made to fail once (3/3). See [`docs/cleaning_report.md`](docs/cleaning_report.md).
